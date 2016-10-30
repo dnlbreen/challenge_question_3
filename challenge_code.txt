@@ -1,0 +1,250 @@
+from food_network_wrapper import recipe_search, get_n_recipes, scrape_recipe
+%matplotlib inline
+import matplotlib
+import seaborn as sns  # plots are prettier with Seaborn
+from wordcloud import WordCloud
+from IPython.display import Image
+from IPython import display
+matplotlib.rcParams['savefig.dpi'] = 2 * matplotlib.rcParams['savefig.dpi']
+from matplotlib import rcParams
+rcParams.update({'figure.autolayout': True})
+
+import simplejson  # more efficient than the default json library
+import sys
+from collections import Counter
+import heapq
+import nltk
+from nltk.corpus import stopwords
+from nltk import word_tokenize
+from nltk.util import ngrams
+from nltk.tokenize.casual   import (TweetTokenizer, casual_tokenize)
+
+from sklearn.cluster import MiniBatchKMeans
+from itertools import islice, chain
+import numpy as np
+import scipy as sp
+import pandas as pd
+import matplotlib.pylab as plt
+import json
+import os
+import time
+import re
+import gensim
+from gensim import corpora, models, similarities
+import pyLDAvis.gensim
+
+#use food network wrapper to scrape data
+
+def search_recipe(search_term, n=10):
+    
+    recipe_list = []
+    
+    
+    
+    rthumbnails = get_n_recipes(search_term, n=n)
+    recipes = []
+    
+    for i in rthumbnails:
+        
+        recipe_element = {}
+        
+        recipe_element['type'] = search_term
+        
+        recipe_element['title'] = i.title
+        recipe_element['url'] = i.url
+        recipe_element['author'] = i.author
+        recipe_element['picture_url'] = i.picture_url
+        recipe_element['total_time'] = i.total_time
+        recipe_element['rating'] = i.rating
+        recipe_element['review_count'] = i.review_count
+
+        recipe = scrape_recipe(i.url)
+        recipe_element['prep_time'] = recipe.prep_time
+        recipe_element['cook_time'] = recipe.cook_time
+        recipe_element['servings'] = recipe.servings
+        recipe_element['level'] = recipe.level
+        recipe_element['ingredients'] = recipe.ingredients
+        recipe_element['directions'] = recipe.directions
+        recipe_element['categories'] = recipe.categories
+        
+        recipe_list.append(recipe_element)
+    
+    df = pd.DataFrame(recipe_list)
+
+    if os.path.exists('recipes.csv'):
+
+        df.to_csv('recipes.csv', header = False, mode = 'a')
+    else:
+        df.to_csv('recipes.csv')
+    time.sleep(3)
+    
+
+#scrape the data and save it to csv file as it comes in
+#limit to 200, not sure enough distinct search results are available for more
+search_recipe("mexican", 200)
+search_recipe("polish", 200)
+search_recipe("chinese", 200)
+search_recipe("italian", 200)
+search_recipe("japanese", 200)
+search_recipe("korean", 200)
+search_recipe("vietnamese", 200)
+search_recipe("indian", 200)
+search_recipe("thai", 200)
+search_recipe("greek", 200)
+search_recipe("french", 200)
+search_recipe("german", 200)
+search_recipe("british", 200)
+search_recipe("caribbean", 200)
+search_recipe("western", 200)
+search_recipe("eastern", 200)
+search_recipe("american", 200)
+search_recipe("mediterranean", 200)
+search_recipe("spanish", 200)
+search_recipe("turkish", 200)
+
+#Scrape additional data based on the titles obtained from the search categories above, to be used later
+#while this data is being scraped I analyze a copy of the original
+#recipes_small.csv
+recipe_list = pd.read_csv('recipes.csv')
+
+for title in recipe_list['title']:
+    
+    search_recipe(str(title), n = 25)
+    
+#analyze the data, first pass is to plot wordclouds and bargraphs
+#for each category of food
+
+def nlargest(n, word_scores):
+    """ Wrapper around heapq to return the n words with the largest count."""
+
+    return heapq.nlargest(n, word_scores, key=lambda x: x[1])
+
+def plot_gramcloud(gramcloud, cuisine_type):
+    plt.axis("off")
+    plt.imshow(gramcloud)
+    plt.title(cuisine_type)
+    plt.savefig('{0}_wordcloud.png'.format(cuisine_type))
+    plt.close()
+    
+def create_bargraph(counter, cuisine_type):
+    df = pd.DataFrame(nlargest(10, counter.items()), columns=['ingredients', 'count'])
+    df.set_index('ingredients').plot(kind='bar')
+    plt.title(cuisine_type)
+    plt.ylabel('occurrences')
+    plt.savefig('{0}_bargraph.png'.format(cuisine_type))
+    plt.close()
+    
+
+def visualize_data(df, cuisine_type):    
+    
+    keywords = [item for sublist in df['keywords'] for item in sublist]
+    counter = Counter(keywords)
+    wordcloud = WordCloud().fit_words(counter.items())
+    plot_gramcloud(wordcloud, cuisine_type)
+    
+    create_bargraph(counter, cuisine_type)
+    
+    return counter, wordcloud
+    
+df = pd.read_csv('recipes.csv')
+
+cuisine_types = set(["mexican", "polish", "chinese", "italian", "japanese", "korean", "vietnamese", "indian", "thai", "greek"
+                    ,"french", "german", "british", "caribbean", "western", "eastern", "american", "mediterranean",
+                    "spanish", "turkish"])
+
+#make a list of stopwords manually by looking at the ingredients
+
+stop = []
+file = open('stopwords.txt')
+
+for n, line in enumerate(file):
+    stop.append(line.strip('\n'))
+
+split_words = '\(.*?\)|' + '|'.join(stop)  + '|\[|\]|' + '1/2|1/3|2/3|1/4|3/4|1/|3/|2/|/*'
+
+#set notation is convenient to add other stop words
+#to take care of stuff not addressed by first cleaning
+#for example, I might now want to remove spices to
+#get a different picture of how ethnic cuisines differ
+
+set_remove = set(['1/', '2/', '3/', '[', ']', '', ' ', 
+            'and', 'to', 'can','hot','cold','with','more', 'or', 'by', 'a', 'an', 
+            '1', '2', '3', '4', '5', '6', '7', '8', '9', 'head', 'tail','.','!',',', 
+            's','p','semi','-','un'])
+set_remove_spices = set(['garlic', 'salt', 'kosher salt', 'black pepper'])
+
+df['keywords'] = df['ingredients'].apply(lambda x: list(set( [item.strip() for item in re.split(split_words, x.lower())] ) - set_remove - set_remove_spices) )
+
+#save the figures for each cuisine type
+for cuisine_type in set(df['type']):
+    
+    type_df = df[df['type'] == cuisine_type]
+    counter, wordcloud = visualize_data(type_df, cuisine_type)
+    
+    counters.update({cuisine_type: counter})
+    wordclouds.update({cuisine_type: wordcloud})
+    
+plt.figure(figsize = (20,20))
+plt.title("With Spices")
+count = 0
+for cuisine_type in set(df['type']):
+    count += 1
+    plt.subplot(5,4,count)
+    plt.axis("off")
+    plt.imshow(wordclouds[cuisine_type])
+    plt.title(cuisine_type, fontsize = 40)
+
+plt.savefig('withspices_wordcloud.png')
+
+#Analyze a balanced subset of each kind of cuisine searched for
+
+df_even = df[df['type'].apply(lambda x: True if x in cuisine_types else False)]
+
+df_even['keywords'] = df_even['ingredients'].apply(lambda x: list(set( [item.strip() for item in re.split(split_words, x.lower())] ) - set_remove - set_remove_spices) )
+
+texts_even = df_even['keywords']
+
+dictionary_even = corpora.Dictionary(texts_even)
+corpus_even = [dictionary_even.doc2bow(text) for text in texts_even]
+
+#train an lda model with 20 topics and 20 passes through
+#the corpus
+alpha = 0.001
+num_topics = 20
+passes = 20
+
+ldamodel_even_20 = gensim.models.ldamodel.LdaModel(
+    corpus_even, num_topics=num_topics, id2word = dictionary_even, 
+    passes=passes, alpha = alpha)
+    
+ldamodel_even_20.save('20_topics_wos_model_even.lda')
+
+cuisines_data_even = pyLDAvis.gensim.prepare(ldamodel_even_20, corpus_even, dictionary_even)
+
+pyLDAvis.display(cuisines_data_even)
+
+pyLDAvis.save_html(cuisines_data_even, '20_topics_low_alpha.html')
+
+lda_models_even_low_alpha = []
+num_topics = [3, 4, 7, 10]
+for num_topic in num_topics:
+    print "Training Model #", num_topic
+    alpha = 0.001
+    passes = 20 #number of passes over the supplied corpus
+
+    lda_models_even_low_alpha.append(gensim.models.ldamodel.LdaModel(
+        corpus_even, num_topics=num_topic, id2word = dictionary_even, 
+        passes=passes, alpha = alpha))
+        
+lda_models_even_low_alpha[0].save('3_topics_wos_model_even.lda')
+lda_models_even_low_alpha[1].save('4_topics_wos_model_even.lda')
+lda_models_even_low_alpha[2].save('7_topics_wos_model_even.lda')
+lda_models_even_low_alpha[3].save('10_topics_wos_model_even.lda')
+
+pyLDAvis.save_html(cuisines_data_even_7, '7_topics_low_alpha.html')
+
+cuisines_data_even_4 = pyLDAvis.gensim.prepare(lda_models_even_low_alpha[1], corpus_even, dictionary_even)
+
+pyLDAvis.display(cuisines_data_even_4)
+
+pyLDAvis.save_html(cuisines_data_even_4, '4_topics_low_alpha.html')
